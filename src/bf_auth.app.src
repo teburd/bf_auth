@@ -1,0 +1,12 @@
+{application, bf_auth,
+ [
+  {description, "Riak Based HTTP Authn/Authz/Session Library"},
+  {vsn, "0.01"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  riakc_pool
+                 ]},
+  {env, []}
+ ]}.
