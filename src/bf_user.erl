@@ -47,13 +47,13 @@ new(Email, Password, Firstname, Lastname) ->
 %% @doc Delete a user.
 -spec delete(Email::email()) -> ok.
 delete(Email) ->
-    riakc_pool:delete(?bucket, Email),
+    bf_riakc:delete(?bucket, Email),
     ok.
 
 %% @doc Find and load a user.
 -spec find(Email::email()) -> User::#user{} | {error, Reason::term()}.
 find(Email) ->
-    case riakc_pool:get(?bucket, Email) of
+    case bf_riakc:get(?bucket, Email) of
         {error, Reason} -> {error, Reason};
         Value -> binary_to_term(Value)
     end.
@@ -61,7 +61,7 @@ find(Email) ->
 %% @doc Save a user
 -spec store(User::#user{}) -> ok | {error, Reason::term()}.
 store(User) ->
-    riakc_pool:put(?bucket, User#user.email, term_to_binary(User)).
+    bf_riakc:put(?bucket, User#user.email, term_to_binary(User)).
 
 %% @doc User email attribute.
 -spec email(User::#user{}) -> Email::email().
@@ -172,7 +172,7 @@ subtract_days(Days, {MegaSecs, Secs, MicroSecs}) ->
 
 user_test_() ->
     {setup,
-        fun() -> ensure_started(riakc_pool), ok end,
+        fun() -> ensure_started(bf_riakc), ok end,
         [fun crud/0, {timeout, 60, fun authentication/0}, fun validation/0]}.
 
 crud() ->

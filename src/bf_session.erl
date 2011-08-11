@@ -39,13 +39,13 @@ new() ->
 %% @doc Delete a session.
 -spec delete(SessionKey::session_key()) -> ok.
 delete(SessionKey) ->
-    riakc_pool:delete(?bucket, SessionKey),
+    bf_riakc:delete(?bucket, SessionKey),
     ok.
 
 %% @doc Find and load a session.
 -spec find(SessionKey::session_key()) -> Session::#session{} | {error, Reason::term()}.
 find(SessionKey) ->
-    case riakc_pool:get(?bucket, SessionKey) of
+    case bf_riakc:get(?bucket, SessionKey) of
         {error, Reason} -> {error, Reason};
         Value -> binary_to_term(Value)
     end.
@@ -53,7 +53,7 @@ find(SessionKey) ->
 %% @doc Save a session
 -spec store(Session::#session{}) -> ok | {error, Reason::term()}.
 store(Session) ->
-    riakc_pool:put(?bucket, Session#session.key, term_to_binary(Session)).
+    bf_riakc:put(?bucket, Session#session.key, term_to_binary(Session)).
 
 %% @doc Session key attribute.
 -spec key(Session::#session{}) -> SessionKey::session_key().
@@ -105,7 +105,7 @@ ensure_started(App) ->
 
 session_test_() ->
     {setup,
-        fun() -> ensure_started(riakc_pool), ok end,
+        fun() -> ensure_started(bf_riakc), ok end,
         [fun crud/0, fun update_values/0]}.
 
 crud() ->
