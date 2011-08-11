@@ -6,9 +6,9 @@
 
 %% api
 -export([new/0,
-         delete/1,
-         find/1,
-         store/1,
+         delete/2,
+         find/2,
+         store/2,
          key/1,
          timestamp/1,
          touch/1,
@@ -37,23 +37,23 @@ new() ->
     #session{}.
 
 %% @doc Delete a session.
--spec delete(SessionKey::session_key()) -> ok.
-delete(SessionKey) ->
-    bf_riakc:delete(?bucket, SessionKey),
+-spec delete(Db::atom(), SessionKey::session_key()) -> ok.
+delete(Db, SessionKey) ->
+    bf_riakc:delete(Db, ?bucket, SessionKey),
     ok.
 
 %% @doc Find and load a session.
--spec find(SessionKey::session_key()) -> Session::#session{} | {error, Reason::term()}.
-find(SessionKey) ->
-    case bf_riakc:get(?bucket, SessionKey) of
+-spec find(Db::atom(), SessionKey::session_key()) -> Session::#session{} | {error, Reason::term()}.
+find(Db, SessionKey) ->
+    case bf_riakc:get(Db, ?bucket, SessionKey) of
         {error, Reason} -> {error, Reason};
         Value -> binary_to_term(Value)
     end.
 
 %% @doc Save a session
--spec store(Session::#session{}) -> ok | {error, Reason::term()}.
-store(Session) ->
-    bf_riakc:put(?bucket, Session#session.key, term_to_binary(Session)).
+-spec store(Db::atom(), Session::#session{}) -> ok | {error, Reason::term()}.
+store(Db, Session) ->
+    bf_riakc:put(Db, ?bucket, Session#session.key, term_to_binary(Session)).
 
 %% @doc Session key attribute.
 -spec key(Session::#session{}) -> SessionKey::session_key().
@@ -94,40 +94,34 @@ erase_value(Session, Key) ->
 
 -ifdef(TEST).
 
-%% @doc Ensure an application has started.
-ensure_started(App) ->
-    case application:start(App) of
-        ok ->
-            ok;
-        {error, {already_started, App}} ->
-            ok
-    end.
+-define(db, bf_session_db).
 
 session_test_() ->
     {setup,
-        fun() -> ensure_started(bf_riakc), ok end,
+        fun() -> bf_riakc:start_link(?db, 8, "localhost", 8081), ok end,
+        fun(_) -> bf_riakc:stop(?db), ok end,
         [fun crud/0, fun update_values/0]}.
 
 crud() ->
     Session = new(),
-    ?assertEqual(ok, store(Session)),
-    ?assertEqual(Session, find(Session#session.key)),
-    ?assertEqual(ok, delete(Session#session.key)),
-    ?assertMatch({error, _}, find(Session#session.key)).
+    ?assertEqual(ok, store(?db, Session)),
+    ?assertEqual(Session, find(?db, Session#session.key)),
+    ?assertEqual(ok, delete(?db, Session#session.key)),
+    ?assertMatch({error, _}, find(?db, Session#session.key)).
 
 update_values() ->
     Session = new(),
-    ?assertEqual(ok, store(Session)),
+    ?assertEqual(ok, store(?db, Session)),
     ?assertEqual(error, find_value(Session, dog)),
     Session2 = store_value(Session, dog, eats),
     ?assertEqual({ok, eats}, find_value(Session2, dog)),
-    ?assertEqual(ok, store(Session2)),
-    ?assertMatch(Session2, find(Session2#session.key)),
+    ?assertEqual(ok, store(?db, Session2)),
+    ?assertMatch(Session2, find(?db, Session2#session.key)),
     Session3 = erase_value(Session2, dog),
     ?assertEqual(error, find_value(Session3, dog)),
-    ?assertEqual(ok, store(Session2)),
-    ?assertMatch(Session2, find(Session2#session.key)),
-    ?assertEqual(ok, delete(Session#session.key)),
-    ?assertMatch({error, _}, find(Session#session.key)).
+    ?assertEqual(ok, store(?db, Session2)),
+    ?assertMatch(Session2, find(?db, Session2#session.key)),
+    ?assertEqual(ok, delete(?db, Session#session.key)),
+    ?assertMatch({error, _}, find(?db, Session#session.key)).
 
 -endif.

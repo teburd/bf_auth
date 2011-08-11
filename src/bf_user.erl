@@ -6,9 +6,9 @@
 
 %% api
 -export([new/4,
-         delete/1,
-         find/1,
-         store/1,
+         delete/2,
+         find/2,
+         store/2,
          email/1,
          name/1,
          timestamp/1,
@@ -45,23 +45,23 @@ new(Email, Password, Firstname, Lastname) ->
     generate_token(User1).
 
 %% @doc Delete a user.
--spec delete(Email::email()) -> ok.
-delete(Email) ->
-    bf_riakc:delete(?bucket, Email),
+-spec delete(Db::atom(), Email::email()) -> ok.
+delete(Db, Email) ->
+    bf_riakc:delete(Db, ?bucket, Email),
     ok.
 
 %% @doc Find and load a user.
--spec find(Email::email()) -> User::#user{} | {error, Reason::term()}.
-find(Email) ->
-    case bf_riakc:get(?bucket, Email) of
+-spec find(Db::atom(), Email::email()) -> User::#user{} | {error, Reason::term()}.
+find(Db, Email) ->
+    case bf_riakc:get(Db, ?bucket, Email) of
         {error, Reason} -> {error, Reason};
         Value -> binary_to_term(Value)
     end.
 
 %% @doc Save a user
--spec store(User::#user{}) -> ok | {error, Reason::term()}.
-store(User) ->
-    bf_riakc:put(?bucket, User#user.email, term_to_binary(User)).
+-spec store(Db::atom(), User::#user{}) -> ok | {error, Reason::term()}.
+store(Db, User) ->
+    bf_riakc:put(Db, ?bucket, User#user.email, term_to_binary(User)).
 
 %% @doc User email attribute.
 -spec email(User::#user{}) -> Email::email().
@@ -148,15 +148,7 @@ add_days(Days, {MegaSecs, Secs, MicroSecs}) ->
 
 -ifdef(TEST).
 
-%% @doc Ensure an application has started.
-ensure_started(App) ->
-    case application:start(App) of
-        ok ->
-            ok;
-        {error, {already_started, App}} ->
-            ok
-    end.
-
+-define(db, bf_user_db).
 
 %% @doc Offset a timestamp negatively by a number of days, used for testing.
 -spec subtract_days(pos_integer(), {integer(), integer(), integer()}) ->
@@ -172,7 +164,8 @@ subtract_days(Days, {MegaSecs, Secs, MicroSecs}) ->
 
 user_test_() ->
     {setup,
-        fun() -> ensure_started(bf_riakc), ok end,
+        fun() -> bf_riakc:start_link(?db, 8, "localhost", 8081), ok end,
+        fun(_) -> bf_riakc:stop(?db), ok end,
         [fun crud/0, {timeout, 60, fun authentication/0}, fun validation/0]}.
 
 crud() ->
@@ -181,11 +174,11 @@ crud() ->
         <<"Bogus">>),
     ?assertEqual(Email, email(User)),
     ?assertMatch({_, _, _}, timestamp(User)),
-    ?assertMatch({error, _}, find(User#user.email)),
-    ?assertEqual(ok, store(User)),
-    ?assertEqual(User, find(User#user.email)),
-    ?assertEqual(ok, delete(User#user.email)),
-    ?assertMatch({error, _}, find(User#user.email)).
+    ?assertMatch({error, _}, find(?db, User#user.email)),
+    ?assertEqual(ok, store(?db, User)),
+    ?assertEqual(User, find(?db, User#user.email)),
+    ?assertEqual(ok, delete(?db, User#user.email)),
+    ?assertMatch({error, _}, find(?db, User#user.email)).
 
 authentication() ->
     User = new(<<"bogus@bogus.com">>, <<"bogus123">>, <<"Bogus">>,
