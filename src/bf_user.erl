@@ -167,9 +167,11 @@ user_test_() ->
 
 crud() ->
     Email = <<"bogus@bogus.com">>,
-    User = new(Email, <<"bogus123">>, <<"Bogus">>,
-        <<"Bogus">>),
+    Name = <<"Bogus">>,
+    Password = <<"bogus123">>,
+    User = new(Email, Name, Password),
     ?assertEqual(Email, email(User)),
+    ?assertEqual(Name, name(User)),
     ?assertMatch({_, _, _}, timestamp(User)),
     ?assertMatch({error, _}, find(?db, User#user.email)),
     ?assertEqual(ok, store(?db, User)),
@@ -178,8 +180,7 @@ crud() ->
     ?assertMatch({error, _}, find(?db, User#user.email)).
 
 authentication() ->
-    User = new(<<"bogus@bogus.com">>, <<"bogus123">>, <<"Bogus">>,
-        <<"Bogus">>),
+    User = new(<<"bogus@bogus.com">>, <<"Bogus">>, <<"bogus123">>),
     ?assertEqual(true, authenticate(User, <<"bogus123">>)),
     ?assertEqual(false, authenticate(User, <<"bogus321">>)),
     User1 = set_password(User, <<"topnotch">>),
@@ -188,8 +189,7 @@ authentication() ->
     ?debugTime("bcrypt hashpw time", bcrypt:hashpw("test", bcrypt:gen_salt(?rounds))).
 
 validation() ->
-    User0 = new(<<"bogus@bogus.com">>, <<"bogus123">>, <<"Bogus">>,
-        <<"Bogus">>),
+    User0 = new(<<"bogus@bogus.com">>, <<"Bogus">>, <<"bogus123">>),
     ?assertEqual(false, valid(User0)),
     ?assertEqual({error, invalid_token}, validate(User0, <<"bogus">>)),
     User1 = User0#user{token_timeout=subtract_days(1, erlang:now())},
