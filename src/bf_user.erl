@@ -5,7 +5,7 @@
 -module(bf_user).
 
 %% api
--export([new/4,
+-export([new/3,
          delete/2,
          find/2,
          store/2,
@@ -29,7 +29,7 @@
 
 -type email() :: binary().
 -record(user, {email, version=1, timestamp=erlang:now(), password=undefined,
-    enabled=true, validated=false, token, token_timeout, firstname, lastname}).
+    enabled=true, validated=false, token, token_timeout, name}).
 
 
 %% ------------------------------------------------------------------
@@ -37,10 +37,9 @@
 %% ------------------------------------------------------------------
 
 %% @doc Create a user.
--spec new(Email::email(), Password::binary(),
-    Firstname::binary(), Lastname::binary()) -> User::#user{}.
-new(Email, Password, Firstname, Lastname) ->
-    User0 = #user{email=Email, firstname=Firstname, lastname=Lastname},
+-spec new(Email::email(), Name::binary(), Password::binary()) -> User::#user{}.
+new(Email, Name, Password) ->
+    User0 = #user{email=Email, name=Name},
     User1 = set_password(User0,Password),
     generate_token(User1).
 
@@ -71,9 +70,7 @@ email(User) ->
 %% @doc User name attribute.
 -spec name(User::#user{}) -> Name::binary().
 name(User) ->
-    Firstname = User#user.firstname,
-    Lastname = User#user.lastname,
-    <<Firstname/binary, " ", Lastname/binary>>.
+    User#user.name.
 
 %% @doc User timestamp attribute.
 -spec timestamp(User::#user{}) -> {integer(), integer(), integer()}.
