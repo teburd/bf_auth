@@ -12,9 +12,8 @@
          key/1,
          timestamp/1,
          touch/1,
-         store_value/3,
-         find_value/2,
-         erase_value/2]).
+         set_user/2,
+         user/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -23,8 +22,8 @@
 -define(bucket, <<"session">>).
 
 -type session_key() :: binary().
--record(session, {key=bf_uuid:v4(), version=1, timestamp=erlang:now(),
-        data=orddict:new()}).
+-type session_user() :: bf_user:email().
+-record(session, {robj, attrs}).
 
 
 %% ------------------------------------------------------------------
@@ -34,59 +33,72 @@
 %% @doc Create a session.
 -spec new() -> Session::#session{}.
 new() ->
-    #session{}.
+    Key = bf_uuid:to_formatted(bf_uuid:v4()),
+    RiakObj = riakc_obj:new(?bucket, Key),
+    Attrs = orddict:from_list([{<<"key">>, Key},
+            {<<"timestamp">>, bf_time:timestamp()},
+            {<<"user">>, <<"anonymous">>}]),
+    #session{robj=RiakObj, attrs=Attrs}.
 
 %% @doc Delete a session.
--spec delete(Db::atom(), SessionKey::session_key()) -> ok.
+-spec delete(Db::any(), SessionKey::session_key()) -> ok.
 delete(Db, SessionKey) ->
-    bf_riakc:delete(Db, ?bucket, SessionKey),
-    ok.
+    riakc_pb_socket:delete(Db, ?bucket, SessionKey).
 
 %% @doc Find and load a session.
--spec find(Db::atom(), SessionKey::session_key()) -> Session::#session{} | {error, Reason::term()}.
+-spec find(Db::any(), SessionKey::session_key()) -> Session::#session{} | {error, Reason::term()}.
 find(Db, SessionKey) ->
-    case bf_riakc:get(Db, ?bucket, SessionKey) of
+    case riakc_pb_socket:get(Db, ?bucket, SessionKey) of
         {error, Reason} -> {error, Reason};
-        Value -> binary_to_term(Value)
+        {ok, RiakObj} ->
+            {Attrs} = jiffy:decode(riakc_obj:get_value(RiakObj)),
+            #session{robj=RiakObj, attrs=Attrs}
     end.
 
 %% @doc Save a session
--spec store(Db::atom(), Session::#session{}) -> ok | {error, Reason::term()}.
+-spec store(Db::any(), Session::#session{}) -> ok | {error, Reason::term()}.
 store(Db, Session) ->
-    bf_riakc:put(Db, ?bucket, Session#session.key, term_to_binary(Session)).
+    Key = key(Session),
+    Value = jiffy:encode({Session#session.attrs}),
+    RiakObj = riakc_obj:update_value(Session#session.robj, Value),
+    case riakc_pb_socket:put(Db, RiakObj) of
+        ok ->
+            Session#session{robj=RiakObj};
+        {ok, Key} ->
+            Session#session{robj=RiakObj};
+        {ok, RiakObj2} ->
+            Session#session{robj=RiakObj2};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Session key attribute.
 -spec key(Session::#session{}) -> SessionKey::session_key().
 key(Session) ->
-    Session#session.key.
+    orddict:fetch(<<"key">>, Session#session.attrs).
 
 %% @doc Session timestamp attribute.
 -spec timestamp(Session::#session{}) -> {integer(), integer(), integer()}.
 timestamp(Session) ->
-    Session#session.timestamp.
+    orddict:fetch(<<"timestamp">>, Session#session.attrs).
 
 %% @doc Set the timestamp attribute of a session to the current time.
 -spec touch(Session::#session{}) -> Session::#session{}.
 touch(Session) ->
-    Session#session{timestamp=erlang:now()}.
+    TStamp = bf_time:timestamp(),
+    Attrs = orddict:store(<<"timestamp">>, TStamp, Session#session.attrs),
+    Session#session{attrs=Attrs}.
 
-%% @doc Store a value associated with the session.
--spec store_value(Session::#session{}, Key::term(), Value::term()) -> Session::#session{}.
-store_value(Session, Key, Value) ->
-    Data = orddict:store(Key, Value, Session#session.data),
-    Session#session{data=Data}.
+%% @doc Set the current user attribute of a session.
+-spec set_user(Session::#session{}, User::session_user()) -> #session{}.
+set_user(Session, User) ->
+    Attrs = orddict:store(<<"user">>, User, Session#session.attrs),
+    Session#session{attrs=Attrs}.
 
-%% @doc Find a value associated with the session.
--spec find_value(Session::#session{}, Key::term()) -> {ok, Value::term()} | error.
-find_value(Session, Key) ->
-    orddict:find(Key, Session#session.data).
-
-%% @doc Erase a value associated with the session.
--spec erase_value(Session::#session{}, Key::term()) -> Session::#session{}.
-erase_value(Session, Key) ->
-    Data = orddict:erase(Key, Session#session.data),
-    Session#session{data=Data}.
-
+%% @doc Get the current user attribute of a session.
+-spec user(Session::#session{}) -> User::session_user().
+user(Session) ->
+    orddict:fetch(<<"user">>, Session#session.attrs).
 
 %% ------------------------------------------------------------------
 %% unit tests
@@ -97,31 +109,35 @@ erase_value(Session, Key) ->
 -define(db, bf_session_db).
 
 session_test_() ->
-    {setup,
-        fun() -> bf_riakc:start_link(?db, 8, "localhost", 8081), ok end,
-        fun(_) -> bf_riakc:stop(?db), ok end,
-        [fun crud/0, fun update_values/0]}.
+    [{setup,
+        fun() ->
+            {ok, Db} = riakc_pb_socket:start_link("localhost", 8081),
+            pong = riakc_pb_socket:ping(Db),
+            Db
+        end,
+        fun(Db) ->
+            riakc_pb_socket:stop(Db),
+            ok
+        end,
+        {with, [fun crud/1]}},
+     fun attributes/0].
 
-crud() ->
+crud(Db) ->
     Session = new(),
-    ?assertEqual(ok, store(?db, Session)),
-    ?assertEqual(Session, find(?db, Session#session.key)),
-    ?assertEqual(ok, delete(?db, Session#session.key)),
-    ?assertMatch({error, _}, find(?db, Session#session.key)).
+    Key = key(Session),
+    Session2 = store(Db, Session),
+    ?assertEqual(Key, key(Session2)),
+    ?assertEqual(key(Session2), key(find(Db, Key))),
+    ?assertEqual(ok, delete(Db, Key)),
+    ?assertMatch({error, _}, find(Db, Key)).
 
-update_values() ->
+attributes() ->
     Session = new(),
-    ?assertEqual(ok, store(?db, Session)),
-    ?assertEqual(error, find_value(Session, dog)),
-    Session2 = store_value(Session, dog, eats),
-    ?assertEqual({ok, eats}, find_value(Session2, dog)),
-    ?assertEqual(ok, store(?db, Session2)),
-    ?assertMatch(Session2, find(?db, Session2#session.key)),
-    Session3 = erase_value(Session2, dog),
-    ?assertEqual(error, find_value(Session3, dog)),
-    ?assertEqual(ok, store(?db, Session2)),
-    ?assertMatch(Session2, find(?db, Session2#session.key)),
-    ?assertEqual(ok, delete(?db, Session#session.key)),
-    ?assertMatch({error, _}, find(?db, Session#session.key)).
+    TStamp = timestamp(Session),
+    ?assert(is_integer(TStamp)),
+    ?assertEqual(<<"anonymous">>, user(Session)),
+    User = <<"test@test.com">>,
+    Session2 = set_user(Session, User),
+    ?assertEqual(User, user(Session2)).
 
 -endif.

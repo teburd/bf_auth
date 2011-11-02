@@ -13,11 +13,7 @@
          name/1,
          timestamp/1,
          authenticate/2,
-         set_password/2,
-         generate_token/1,
-         token/1,
-         validate/2,
-         valid/1
+         set_password/2
          ]).
 
 -ifdef(TEST).
@@ -28,9 +24,7 @@
 -define(rounds, 10).
 
 -type email() :: binary().
--record(user, {email, version=1, timestamp=erlang:now(), password=undefined,
-    enabled=true, validated=false, token, token_timeout, name}).
-
+-record(user, {robj, attrs}).
 
 %% ------------------------------------------------------------------
 %% api
@@ -39,104 +33,87 @@
 %% @doc Create a user.
 -spec new(Email::email(), Name::binary(), Password::binary()) -> User::#user{}.
 new(Email, Name, Password) ->
-    User0 = #user{email=Email, name=Name},
-    User1 = set_password(User0,Password),
-    generate_token(User1).
+    PWHash = hashpw(Password),
+    TStamp =  bf_time:timestamp(),
+    RiakObj = riakc_obj:new(?bucket, Email),
+    Attrs = orddict:from_list([{<<"email">>, Email}, {<<"name">>, Name},
+            {<<"timestamp">>, TStamp}, {<<"password">>, PWHash}]),
+    #user{robj=RiakObj, attrs=Attrs}.
 
 %% @doc Delete a user.
--spec delete(Db::atom(), Email::email()) -> ok.
+-spec delete(Db::any(), Email::email()) -> ok.
 delete(Db, Email) ->
-    bf_riakc:delete(Db, ?bucket, Email),
-    ok.
+    riakc_pb_socket:delete(Db, ?bucket, Email).
 
 %% @doc Find and load a user.
--spec find(Db::atom(), Email::email()) -> User::#user{} | {error, Reason::term()}.
+-spec find(Db::any(), Email::email()) -> User::#user{} | {error, Reason::term()}.
 find(Db, Email) ->
-    case bf_riakc:get(Db, ?bucket, Email) of
+    case riakc_pb_socket:get(Db, ?bucket, Email) of
         {error, Reason} -> {error, Reason};
-        Value -> binary_to_term(Value)
+        {ok, RiakObj} ->
+            {Attrs} = jiffy:decode(riakc_obj:get_value(RiakObj)),
+            #user{robj=RiakObj, attrs=Attrs}
     end.
 
 %% @doc Save a user
--spec store(Db::atom(), User::#user{}) -> ok | {error, Reason::term()}.
+-spec store(Db::any(), User::#user{}) -> User::#user{} | {error, Reason::term()}.
 store(Db, User) ->
-    bf_riakc:put(Db, ?bucket, User#user.email, term_to_binary(User)).
+    Email = email(User),
+    Value = jiffy:encode({User#user.attrs}),
+    RiakObj = riakc_obj:update_value(User#user.robj, Value),
+    case riakc_pb_socket:put(Db, RiakObj) of
+        ok ->
+            User#user{robj=RiakObj};
+        {ok, Email} ->
+            User#user{robj=RiakObj};
+        {ok, RiakObj2} ->
+            User#user{robj=RiakObj2};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc User email attribute.
 -spec email(User::#user{}) -> Email::email().
 email(User) ->
-    User#user.email.
+    orddict:fetch(<<"email">>, User#user.attrs).
 
 %% @doc User name attribute.
 -spec name(User::#user{}) -> Name::binary().
 name(User) ->
-    User#user.name.
+    orddict:fetch(<<"name">>, User#user.attrs).
 
-%% @doc User timestamp attribute.
--spec timestamp(User::#user{}) -> {integer(), integer(), integer()}.
+%% @doc User timestamp attribute. Gregorian seconds since year 0 to UTC time.
+-spec timestamp(User::#user{}) -> integer().
 timestamp(User) ->
-    User#user.timestamp.
+    orddict:fetch(<<"timestamp">>, User#user.attrs).
 
 %% @doc Authenticate a password with a users password.
 -spec authenticate(User::#user{}, Password::binary()) -> true | false.
 authenticate(User, Password) ->
-    Hash = binary_to_list(User#user.password),
-    PasswordLst = binary_to_list(Password),
-    Hash =:= bcrypt:hashpw(PasswordLst, Hash).
+    Hash = orddict:fetch(<<"password">>, User#user.attrs),
+    verifypw(Password, Hash).
 
 %% @doc Set password attribute.
 -spec set_password(User::#user{}, Password::binary()) -> User::#user{}.
 set_password(User, Password) ->
-    PasswordLst = binary_to_list(Password),
-    Hash = bcrypt:hashpw(PasswordLst, bcrypt:gen_salt(?rounds)),
-    User#user{password=list_to_binary(Hash)}.
-
-%% @doc Generate a validation token attribute and set it.
--spec generate_token(User::#user{}) -> User::#user{}.
-generate_token(User) ->
-    User#user{token=crypto:rand_bytes(16), token_timeout=add_days(30, erlang:now())}.
-
-%% @doc Validation token attribute.
--spec token(User::#user{}) -> Token::binary().
-token(User) ->
-    User#user.token.
-
-%% @doc Mark user as validated given a validation token.
--spec validate(User::#user{}, Token::binary()) -> User::#user{} |
-    {error, expired_token} | {error, invalid_token}.
-validate(User, Token) ->
-    case timer:now_diff(erlang:now(), User#user.token_timeout) > 0 of
-        true ->
-            {error, expired_token};
-        false ->
-            case User#user.token == Token of
-                true ->
-                    User#user{validated=true};
-                false ->
-                    {error, invalid_token}
-            end
-    end.
-
-%% @doc Validity check, checks if a user account can be used. 
--spec valid(User::#user{}) -> true | false.
-valid(User) ->
-    User#user.validated and User#user.enabled.
+    Hash = hashpw(Password),
+    Attrs = orddict:store(<<"password">>, Hash, User#user.attrs),
+    User#user{attrs=Attrs}.
 
 
 %% ------------------------------------------------------------------
 %% private api
 %% ------------------------------------------------------------------
 
-%% @doc Offset a timestamp by a number of days.
--spec add_days(pos_integer(), {integer(), integer(), integer()}) ->
-    {integer(), integer(), integer()}.
-add_days(Days, {MegaSecs, Secs, MicroSecs}) ->
-    AddTime = Days*24*60*60,
-    AddMega = AddTime/1000000,
-    AddSecs = AddTime - AddMega,
-    MegaSecs2 = MegaSecs + AddMega,
-    Secs2 = Secs + AddSecs,
-    {MegaSecs2, Secs2, MicroSecs}.
+hashpw(Password) ->
+    PasswordStr = binary_to_list(Password),
+    Hash = bcrypt:hashpw(PasswordStr, bcrypt:gen_salt(?rounds)),
+    list_to_binary(Hash).
+
+verifypw(Password, Hash) ->
+    PasswordStr = binary_to_list(Password),
+    HashStr = binary_to_list(Hash),
+    HashStr =:= bcrypt:hashpw(PasswordStr, HashStr).
 
 
 %% ------------------------------------------------------------------
@@ -147,37 +124,36 @@ add_days(Days, {MegaSecs, Secs, MicroSecs}) ->
 
 -define(db, bf_user_db).
 
-%% @doc Offset a timestamp negatively by a number of days, used for testing.
--spec subtract_days(pos_integer(), {integer(), integer(), integer()}) ->
-    {integer(), integer(), integer()}.
-subtract_days(Days, {MegaSecs, Secs, MicroSecs}) ->
-    AddTime = Days*24*60*60,
-    AddMega = AddTime/1000000,
-    AddSecs = AddTime - AddMega,
-    MegaSecs2 = MegaSecs - AddMega,
-    Secs2 = Secs - AddSecs,
-    {MegaSecs2, Secs2, MicroSecs}.
-
-
 user_test_() ->
-    {setup,
-        fun() -> bf_riakc:start_link(?db, 8, "localhost", 8081), ok end,
-        fun(_) -> bf_riakc:stop(?db), ok end,
-        [fun crud/0, {timeout, 60, fun authentication/0}, fun validation/0]}.
+    [{setup,
+        fun() ->
+            {ok, Db} = riakc_pb_socket:start_link("localhost", 8081),
+            pong = riakc_pb_socket:ping(Db),
+            Db
+        end,
+        fun(Db) ->
+            riakc_pb_socket:stop(Db),
+            ok
+        end,
+        {with, [fun crud/1]}},
+    {timeout, 60, fun authentication/0}].
 
-crud() ->
+crud(Db) ->
     Email = <<"bogus@bogus.com">>,
     Name = <<"Bogus">>,
     Password = <<"bogus123">>,
     User = new(Email, Name, Password),
     ?assertEqual(Email, email(User)),
     ?assertEqual(Name, name(User)),
-    ?assertMatch({_, _, _}, timestamp(User)),
-    ?assertMatch({error, _}, find(?db, User#user.email)),
-    ?assertEqual(ok, store(?db, User)),
-    ?assertEqual(User, find(?db, User#user.email)),
-    ?assertEqual(ok, delete(?db, User#user.email)),
-    ?assertMatch({error, _}, find(?db, User#user.email)).
+    TStamp = timestamp(User),
+    ?assert(is_integer(TStamp)),
+    ?assertMatch({error, _}, find(Db, Email)),
+    User2 = store(Db, User),
+    ?assertEqual(email(User), email(User2)),
+    User3 = find(Db, Email),
+    ?assertEqual(User3#user.attrs, User2#user.attrs),
+    ?assertEqual(ok, delete(Db, Email)),
+    ?assertMatch({error, _}, find(Db, Email)).
 
 authentication() ->
     User = new(<<"bogus@bogus.com">>, <<"Bogus">>, <<"bogus123">>),
@@ -187,15 +163,5 @@ authentication() ->
     ?assertEqual(false, authenticate(User1, <<"bogus123">>)),
     ?assertEqual(true, authenticate(User1, <<"topnotch">>)),
     ?debugTime("bcrypt hashpw time", bcrypt:hashpw("test", bcrypt:gen_salt(?rounds))).
-
-validation() ->
-    User0 = new(<<"bogus@bogus.com">>, <<"Bogus">>, <<"bogus123">>),
-    ?assertEqual(false, valid(User0)),
-    ?assertEqual({error, invalid_token}, validate(User0, <<"bogus">>)),
-    User1 = User0#user{token_timeout=subtract_days(1, erlang:now())},
-    ?assertEqual({error, expired_token}, validate(User1, <<"bogus">>)),
-    Token = token(User0),
-    User2 = validate(User0, Token),
-    ?assertEqual(true, valid(User2)).
 
 -endif.
