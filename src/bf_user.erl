@@ -20,6 +20,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include_lib("riakc/include/riakc_obj.hrl").
+
 -define(bucket, <<"users">>).
 -define(rounds, 10).
 
@@ -60,17 +62,14 @@ find(Db, Email) ->
 store(Db, User) ->
     Email = email(User),
     Value = jiffy:encode({User#user.attrs}),
-    RiakObj = riakc_obj:update_value(User#user.robj, Value),
-    Metadata = riakc_obj:get_metadata(RiakObj),
-    Metadata2 = dict:store(?MD_CTYPE, <<"application/json">>, Metadata),
-    RiakObj2 = riakc_obj:update_metadata(RiakObj, Metadata2),
-    case riakc_pb_socket:put(Db, RiakObj2) of
+    RiakObj = riakc_obj:update_value(User#user.robj, Value, <<"application/json">>),
+    case riakc_pb_socket:put(Db, RiakObj) of
         ok ->
-            User#user{robj=RiakObj2};
+            User#user{robj=RiakObj};
         {ok, Email} ->
+            User#user{robj=RiakObj};
+        {ok, RiakObj2} ->
             User#user{robj=RiakObj2};
-        {ok, RiakObj3} ->
-            User#user{robj=RiakObj3};
         {error, Reason} ->
             {error, Reason}
     end.

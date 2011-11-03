@@ -62,11 +62,10 @@ find(Db, SessionKey) ->
 store(Db, Session) ->
     Key = key(Session),
     Value = jiffy:encode({Session#session.attrs}),
-    RiakObj = riakc_obj:update_value(Session#session.robj, Value),a
-    Metadata = riakc_obj:get_metadata(RiakObj),
-    Metadata2 = dict:store(?MD_CTYPE, <<"application/json">>, Metadata),
-    Metadata3 = dict:store(?MD_INDEX, [{<<"timestamp">>, timestamp(Session)}]),
-    RiakObj2 = riakc_obj:update_metadata(RiakObj, Metadata3),
+    RiakObj = riakc_obj:update_value(Session#session.robj, Value, <<"application/json">>),
+    Metadata = riakc_obj:get_update_metadata(RiakObj),
+    Metadata2 = dict:store(?MD_INDEX, [{<<"timestamp_int">>, timestamp(Session)}], Metadata),
+    RiakObj2 = riakc_obj:update_metadata(RiakObj, Metadata2),
     case riakc_pb_socket:put(Db, RiakObj2) of
         ok ->
             Session#session{robj=RiakObj2};
