@@ -20,7 +20,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(bucket, <<"user">>).
+-define(bucket, <<"users">>).
 -define(rounds, 10).
 
 -type email() :: binary().

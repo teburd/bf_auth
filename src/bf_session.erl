@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(bucket, <<"session">>).
+-define(bucket, <<"sessions">>).
 
 -type session_key() :: binary().
 -type session_user() :: bf_user:email().
