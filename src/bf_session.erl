@@ -19,6 +19,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include_lib("riakc/include/riakc_obj.hrl").
+
 -define(bucket, <<"sessions">>).
 
 -type session_key() :: binary().
@@ -60,14 +62,18 @@ find(Db, SessionKey) ->
 store(Db, Session) ->
     Key = key(Session),
     Value = jiffy:encode({Session#session.attrs}),
-    RiakObj = riakc_obj:update_value(Session#session.robj, Value),
-    case riakc_pb_socket:put(Db, RiakObj) of
+    RiakObj = riakc_obj:update_value(Session#session.robj, Value),a
+    Metadata = riakc_obj:get_metadata(RiakObj),
+    Metadata2 = dict:store(?MD_CTYPE, <<"application/json">>, Metadata),
+    Metadata3 = dict:store(?MD_INDEX, [{<<"timestamp">>, timestamp(Session)}]),
+    RiakObj2 = riakc_obj:update_metadata(RiakObj, Metadata3),
+    case riakc_pb_socket:put(Db, RiakObj2) of
         ok ->
-            Session#session{robj=RiakObj};
-        {ok, Key} ->
-            Session#session{robj=RiakObj};
-        {ok, RiakObj2} ->
             Session#session{robj=RiakObj2};
+        {ok, Key} ->
+            Session#session{robj=RiakObj2};
+        {ok, RiakObj3} ->
+            Session#session{robj=RiakObj3};
         {error, Reason} ->
             {error, Reason}
     end.

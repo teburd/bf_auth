@@ -61,13 +61,16 @@ store(Db, User) ->
     Email = email(User),
     Value = jiffy:encode({User#user.attrs}),
     RiakObj = riakc_obj:update_value(User#user.robj, Value),
-    case riakc_pb_socket:put(Db, RiakObj) of
+    Metadata = riakc_obj:get_metadata(RiakObj),
+    Metadata2 = dict:store(?MD_CTYPE, <<"application/json">>, Metadata),
+    RiakObj2 = riakc_obj:update_metadata(RiakObj, Metadata2),
+    case riakc_pb_socket:put(Db, RiakObj2) of
         ok ->
-            User#user{robj=RiakObj};
-        {ok, Email} ->
-            User#user{robj=RiakObj};
-        {ok, RiakObj2} ->
             User#user{robj=RiakObj2};
+        {ok, Email} ->
+            User#user{robj=RiakObj2};
+        {ok, RiakObj3} ->
+            User#user{robj=RiakObj3};
         {error, Reason} ->
             {error, Reason}
     end.
